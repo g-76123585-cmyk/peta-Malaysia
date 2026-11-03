@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Misi Puzzle Peta Malaysia</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MediaPipe Libraries (Dimuatkan secara luaran) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Fredoka', sans-serif;
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            overflow-x: hidden;
+            user-select: none;
+            touch-action: none; /* Mengelakkan ralat scroll di peranti mudah alih semasa menekan */
+        }
+        
+        .map-path {
+            fill: #94a3b8;
+            stroke: #ffffff;
+            stroke-width: 2;
+            transition: fill 0.3s, transform 0.2s;
+            cursor: pointer;
+        }
+        .map-path:hover {
+            fill: #cbd5e1;
+            filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.3));
+        }
+        .map-path.correct { fill: #4ade80 !important; }
+        
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255,255,255,0.5);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+
+        #draggable-label {
+            position: absolute;
+            z-index: 50;
+            transform: translate(-50%, -50%);
+            cursor: grab;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        #draggable-label:active {
+            cursor: grabbing;
+        }
+        
+        .pointer-hand {
+            position: fixed;
+            width: 20px;
+            height: 20px;
+            background-color: #ef4444;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.8);
+            display: none;
+            transition: transform 0.1s;
+        }
+        
+        .pointer-hand.pinching {
+            background-color: #22c55e;
+            transform: translate(-50%, -50%) scale(0.8);
+            box-shadow: 0 0 15px rgba(34, 197, 94, 0.8);
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
+        }
+        .shake { animation: shake 0.4s ease-in-out; }
+        
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+            70% { box-shadow: 0 0 0 20px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+        .correct-anim { animation: pulse-green 1s; background-color: #4ade80 !important; color: white !important; }
+
+        #notification-box {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            display: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-800 flex flex-col items-center">
+
+    <!-- Sistem Notifikasi Khas -->
+    <div id="notification-box" class="bg-gray-800 text-white px-6 py-3 rounded-full font-semibold shadow-lg text-sm sm:text-base">
+        Peringatan!
+    </div>
+
+    <!-- HALAMAN 1: PENDAFTARAN -->
+    <div id="reg-screen" class="flex flex-col items-center justify-center min-h-screen w-full px-4 max-w-lg mx-auto">
+        <div class="glass-panel p-8 rounded-3xl w-full text-center">
+            <h1 class="text-4xl font-bold text-blue-600 mb-2">MISI PUZZLE</h1>
+            <h2 class="text-2xl font-bold text-red-500 mb-6">PETA MALAYSIA</h2>
+            
+            <div class="space-y-4 text-left">
+                <div>
+                    <label class="block font-semibold mb-1 text-slate-700">Nama Murid</label>
+                    <input type="text" id="input-nama" class="w-full px-4 py-3 border-2 border-blue-200 rounded-xl focus:outline-none focus:border-blue-500 transition-colors" placeholder="Masukkan nama penuh" required>
+                </div>
+                <div>
+                    <label class="block font-semibold mb-1 text-slate-700">Kelas</label>
+                    <input type="text" id="input-kelas" class="w-full px-4 py-3 border-2 border-blue-200 rounded-xl focus:outline-none focus:border-blue-500 transition-colors" placeholder="Contoh: 3 Bestari" required>
+                </div>
+                <button id="btn-mula" class="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white text-xl font-bold py-4 rounded-xl shadow-lg transition-transform transform hover:scale-105 active:scale-95">
+                    MULA PERMAINAN
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- HALAMAN 2: PERMAINAN (MAP & CAMERA) -->
+    <div id="game-screen" class="hidden w-full h-screen flex flex-col pt-4 px-4 overflow-hidden relative">
+        
+        <!-- Header Permainan -->
+        <div class="glass-panel rounded-2xl p-4 flex flex-wrap justify-between items-center z-10 mx-auto w-full max-w-6xl shadow-md gap-2">
+            <div class="flex items-center gap-4">
+                <div class="hidden sm:block text-sm">
+                    <div class="font-bold text-blue-700" id="display-nama">Pemain</div>
+                    <div class="text-slate-500" id="display-kelas">Kelas</div>
+                </div>
+                <div class="bg-blue-100 px-4 py-2 rounded-lg border border-blue-200">
+                    <span class="font-bold text-blue-800 text-lg">Skor: <span id="skor">0</span></span>
+                </div>
+                <div class="bg-red-100 px-4 py-2 rounded-lg border border-red-200 text-red-600 flex items-center gap-1 font-bold text-lg">
+                    <span>❤️</span> <span id="nyawa">3</span>
+                </div>
+            </div>
+            
+            <div class="text-center font-bold">
+                <div class="text-2xl text-slate-700" id="masa">00:00</div>
+            </div>
+
+            <div class="flex gap-2">
+                <button id="btn-kamera" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-lg text-sm transition-colors shadow flex items-center gap-2">
+                    📷 <span class="hidden sm:inline">Aktifkan Kamera</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Ruangan Kamera (Mini) - Tersembunyi pada asalnya -->
+        <div id="kamera-container" class="absolute top-24 right-4 w-32 h-24 sm:w-48 sm:h-36 bg-black rounded-lg overflow-hidden shadow-lg border-2 border-white z-20 hidden">
+            <video id="videoElement" class="w-full h-full object-cover" autoplay playsinline></video>
+            <canvas id="canvasElement" class="absolute top-0 left-0 w-full h-full object-cover"></canvas>
+            <div id="kamera-loading" class="absolute inset-0 flex items-center justify-center text-white text-xs text-center p-2 font-bold">Memuatkan Sistem Jari...</div>
+        </div>
+
+        <!-- Paparan Soalan -->
+        <div class="mt-6 flex flex-col items-center z-10 pointer-events-none">
+            <div class="text-lg font-bold text-slate-700 mb-2 drop-shadow-md text-center">Tarik label ke kawasan peta yang betul</div>
+            <div class="bg-white py-1 px-4 rounded-full shadow text-sm font-semibold mb-4 text-slate-500">Soalan <span id="soalan-semasa">1</span>/16</div>
+        </div>
+
+        <!-- Label Boleh Ditarik (Jawapan) -->
+        <div id="draggable-label" class="bg-blue-600 text-white font-bold text-xl py-3 px-6 rounded-2xl border-4 border-white shadow-lg">
+            MEMUATKAN...
+        </div>
+
+        <!-- SVG Peta Malaysia -->
+        <div class="flex-1 w-full flex items-center justify-center relative -mt-10 sm:mt-0 p-4">
+            <svg id="malaysia-map" viewBox="0 0 1000 450" class="w-full max-w-5xl max-h-full drop-shadow-2xl">
+                <!-- SEMENANJUNG MALAYSIA -->
+                <path id="perlis" class="map-path" data-name="Perlis" d="M 230 40 L 250 40 L 245 60 L 225 55 Z" />
+                <path id="kedah" class="map-path" data-name="Kedah" d="M 225 55 L 245 60 L 260 80 L 265 110 L 230 115 L 210 90 Z" />
+                <path id="pulau_pinang" class="map-path" data-name="Pulau Pinang" d="M 200 95 L 215 95 L 210 115 L 195 110 Z" />
+                <path id="perak" class="map-path" data-name="Perak" d="M 230 115 L 265 110 L 290 150 L 300 200 L 270 230 L 240 210 L 220 160 Z" />
+                <path id="kelantan" class="map-path" data-name="Kelantan" d="M 260 80 L 300 70 L 330 110 L 310 160 L 290 150 L 265 110 Z" />
+                <path id="terengganu" class="map-path" data-name="Terengganu" d="M 300 70 L 340 80 L 360 140 L 330 180 L 310 160 L 330 110 Z" />
+                <path id="pahang" class="map-path" data-name="Pahang" d="M 290 150 L 310 160 L 330 180 L 360 140 L 390 180 L 380 240 L 340 270 L 290 230 L 300 200 Z" />
+                <path id="selangor" class="map-path" data-name="Selangor" d="M 240 210 L 270 230 L 290 230 L 295 270 L 260 280 L 235 250 Z" />
+                <circle id="kuala_lumpur" class="map-path" data-name="W.P. Kuala Lumpur" cx="270" cy="255" r="8" fill="#fcd34d" stroke="#b45309" stroke-width="2"/>
+                <circle id="putrajaya" class="map-path" data-name="W.P. Putrajaya" cx="265" cy="270" r="5" fill="#f87171" stroke="#991b1b" stroke-width="1.5"/>
+                <path id="negeri_sembilan" class="map-path" data-name="Negeri Sembilan" d="M 260 280 L 295 270 L 315 285 L 300 310 L 270 300 Z" />
+                <path id="melaka" class="map-path" data-name="Melaka" d="M 270 300 L 300 310 L 315 330 L 280 325 Z" />
+                <path id="johor" class="map-path" data-name="Johor" d="M 340 270 L 380 240 L 420 300 L 380 350 L 315 330 L 300 310 L 315 285 L 295 270 Z" />
+
+                <!-- SABAH & SARAWAK -->
+                <path id="sarawak" class="map-path" data-name="Sarawak" d="M 500 350 L 530 280 L 580 240 L 640 230 L 680 260 L 720 220 L 750 240 L 710 300 L 650 330 L 580 370 Z" />
+                <path id="sabah" class="map-path" data-name="Sabah" d="M 720 220 L 760 140 L 820 120 L 880 150 L 920 180 L 880 240 L 810 230 L 750 240 Z" />
+                <circle id="labuan" class="map-path" data-name="W.P. Labuan" cx="725" cy="180" r="6" fill="#60a5fa" stroke="#1e3a8a" stroke-width="2"/>
+                
+                <text x="250" y="380" font-size="14" fill="#64748b" font-weight="bold">Semenanjung Malaysia</text>
+                <text x="650" y="400" font-size="14" fill="#64748b" font-weight="bold">Sabah & Sarawak</text>
+            </svg>
+        </div>
+    </div>
+
+    <!-- HALAMAN 3: TAMAT (KEPUTUSAN) -->
+    <div id="end-screen" class="hidden flex-col items-center justify-center min-h-screen w-full px-4 absolute top-0 left-0 bg-white/90 backdrop-blur-sm z-50">
+        <div class="glass-panel p-8 rounded-3xl w-full max-w-lg text-center shadow-2xl">
+            <h1 id="end-title" class="text-4xl font-bold mb-2">TAHNIAH!</h1>
+            <p id="end-msg" class="text-slate-600 mb-6 font-semibold">Anda berjaya menyelesaikan Misi!</p>
+            
+            <div class="bg-slate-100 p-6 rounded-2xl mb-6 space-y-3 text-left">
+                <div class="flex justify-between border-b pb-2"><span class="font-bold text-slate-500">Nama:</span> <span id="res-nama" class="font-bold text-slate-800"></span></div>
+                <div class="flex justify-between border-b pb-2"><span class="font-bold text-slate-500">Kelas:</span> <span id="res-kelas" class="font-bold text-slate-800"></span></div>
+                <div class="flex justify-between border-b pb-2"><span class="font-bold text-slate-500">Skor Akhir:</span> <span id="res-skor" class="font-bold text-blue-600 text-xl"></span></div>
+                <div class="flex justify-between border-b pb-2"><span class="font-bold text-slate-500">Masa:</span> <span id="res-masa" class="font-bold text-slate-800"></span></div>
+                <div class="flex justify-between"><span class="font-bold text-slate-500">Baki Nyawa:</span> <span id="res-nyawa" class="font-bold text-red-500"></span></div>
+            </div>
+
+            <div id="save-status" class="text-sm font-semibold text-blue-500 mb-4 h-6">Menyimpan rekod...</div>
+
+            <div class="flex flex-col sm:flex-row gap-4">
+                <button id="btn-main-semula" class="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl shadow-lg transition-transform transform hover:scale-105">MAIN SEMULA</button>
+                <button id="btn-menu-utama" class="flex-1 bg-slate-500 hover:bg-slate-600 text-white font-bold py-3 rounded-xl shadow-lg transition-transform transform hover:scale-105">MENU UTAMA</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Titik kursor jari untuk kawalan kamera (Disembunyikan asalnya) -->
+    <div id="finger-cursor" class="pointer-hand"></div>
+
+    <script>
+        // ==========================================
+        // 1. DATA & STATE PENGURUSAN
+        // ==========================================
+        const senaraiNegeri = [
+            { id: 'johor', nama: 'Johor' }, { id: 'kedah', nama: 'Kedah' }, { id: 'kelantan', nama: 'Kelantan' },
+            { id: 'melaka', nama: 'Melaka' }, { id: 'negeri_sembilan', nama: 'Negeri Sembilan' },
+            { id: 'pahang', nama: 'Pahang' }, { id: 'perak', nama: 'Perak' }, { id: 'perlis', nama: 'Perlis' },
+            { id: 'pulau_pinang', nama: 'Pulau Pinang' }, { id: 'selangor', nama: 'Selangor' },
+            { id: 'terengganu', nama: 'Terengganu' }, { id: 'sabah', nama: 'Sabah' }, { id: 'sarawak', nama: 'Sarawak' },
+            { id: 'kuala_lumpur', nama: 'W.P. Kuala Lumpur' }, { id: 'putrajaya', nama: 'W.P. Putrajaya' },
+            { id: 'labuan', nama: 'W.P. Labuan' }
+        ];
+
+        let state = {
+            nama: '', kelas: '', skor: 0, nyawa: 3, masa: 0,
+            intervalMasa: null, isKameraAktif: false, isPinching: false,
+            remainingQuestions: [], soalanSemasa: null, totalSoalan: senaraiNegeri.length
+        };
+
+        const screens = {
+            reg: document.getElementById('reg-screen'),
+            game: document.getElementById('game-screen'),
+            end: document.getElementById('end-screen')
+        };
+        const draggableLabel = document.getElementById('draggable-label');
+        const notifBox = document.getElementById('notification-box');
+
+        // Tangkap ralat global untuk mengelakkan skrin terhenti tanpa disedari
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error("Ralat dikesan:", message);
+            // Jangan halang permainan diteruskan jika melibatkan komponen luaran, hanya papar maklumat log
+            return false;
+        };
+
+        // ==========================================
+        // 2. FUNGSI UTILITI & ANTARA MUKA (UI)
+        // ==========================================
+        function showNotification(msg, type='normal', duration=3000) {
+            notifBox.textContent = msg;
+            notifBox.style.display = 'block';
+            if(type === 'error') notifBox.className = "bg-red-600 text-white px-6 py-3 rounded-full font-bold shadow-lg z-[10000] fixed top-4";
+            else if(type === 'success') notifBox.className = "bg-green-500 text-white px-6 py-3 rounded-full font-bold shadow-lg z-[10000] fixed top-4";
+            else notifBox.className = "bg-gray-800 text-white px-6 py-3 rounded-full font-bold shadow-lg z-[10000] fixed top-4";
+            
+            setTimeout(() => { notifBox.style.display = 'none'; }, duration);
+        }
+
+        function formatMasa(saat) {
+            let m = Math.floor(saat / 60);
+            let s = saat % 60;
+            return (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+        }
+
+        function switchScreen(screenName) {
+            screens.reg.classList.add('hidden');
+            screens.game.classList.add('hidden');
+            screens.end.classList.add('hidden');
+            screens.reg.classList.remove('flex');
+            screens.end.classList.remove('flex');
+
+            if(screenName === 'reg') {
+                screens.reg.classList.remove('hidden');
+                screens.reg.classList.add('flex');
+            } else if (screenName === 'game') {
+                screens.game.classList.remove('hidden');
+            } else if (screenName === 'end') {
+                screens.end.classList.remove('hidden');
+                screens.end.classList.add('flex');
+            }
+        }
+
+        // ==========================================
+        // 3. LOGIK PERMAINAN
+        // ==========================================
+        document.addEventListener('DOMContentLoaded', () => {
+            // Mula Permainan
+            document.getElementById('btn-mula').addEventListener('click', (e) => {
+                e.preventDefault();
+                const nama = document.getElementById('input-nama').value.trim();
+                const kelas = document.getElementById('input-kelas').value.trim();
+
+                if(nama === '' || kelas === '') {
+                    showNotification('Sila isikan Nama dan Kelas terlebih dahulu!', 'error');
+                    return;
+                }
+
+                state.nama = nama;
+                state.kelas = kelas;
+                document.getElementById('display-nama').innerText = nama;
+                document.getElementById('display-kelas').innerText = kelas;
+
+                mulakanPermainan();
+            });
+
+            // Susun fungsi Tetikus dan Sentuhan
+            resetLabelPosition();
+            setupDragAndDrop();
+        });
+
+        function mulakanPermainan() {
+            switchScreen('game'); // Pantas bertukar skrin tanpa halangan
+            
+            state.skor = 0;
+            state.nyawa = 3;
+            state.masa = 0;
+            state.remainingQuestions = [...senaraiNegeri];
+            state.remainingQuestions.sort(() => Math.random() - 0.5);
+
+            updateUI();
+            resetPeta();
+            
+            clearInterval(state.intervalMasa);
+            state.intervalMasa = setInterval(() => {
+                state.masa++;
+                document.getElementById('masa').innerText = formatMasa(state.masa);
+            }, 1000);
+
+            janaSoalan();
+        }
+
+        function janaSoalan() {
+            if (state.nyawa <= 0 || state.remainingQuestions.length === 0) {
+                tamatPermainan();
+                return;
+            }
+
+            state.soalanSemasa = state.remainingQuestions.pop();
+            draggableLabel.innerText = state.soalanSemasa.nama.toUpperCase();
+            document.getElementById('soalan-semasa').innerText = (state.totalSoalan - state.remainingQuestions.length);
+            
+            resetLabelPosition();
+            
+            draggableLabel.classList.remove('correct-anim', 'shake');
+            draggableLabel.style.backgroundColor = '#2563eb';
+        }
+
+        function semakJawapan(targetId) {
+            if (!state.soalanSemasa) return;
+
+            if (targetId === state.soalanSemasa.id) {
+                state.skor += 10;
+                document.getElementById(targetId).classList.add('correct');
+                
+                draggableLabel.classList.add('correct-anim');
+                draggableLabel.innerText = "BETUL!";
+                updateUI();
+
+                setTimeout(() => { janaSoalan(); }, 1000);
+            } else {
+                state.nyawa--;
+                draggableLabel.classList.add('shake');
+                draggableLabel.style.backgroundColor = '#ef4444';
+                updateUI();
+                
+                showNotification(`Salah! Itu bukan ${state.soalanSemasa.nama}`, 'error', 1500);
+
+                setTimeout(() => {
+                    if (state.nyawa > 0) {
+                        draggableLabel.classList.remove('shake');
+                        draggableLabel.style.backgroundColor = '#2563eb';
+                        resetLabelPosition();
+                    } else {
+                        tamatPermainan();
+                    }
+                }, 1000);
+            }
+        }
+
+        function updateUI() {
+            document.getElementById('skor').innerText = state.skor;
+            document.getElementById('nyawa').innerText = state.nyawa;
+        }
+
+        function resetPeta() {
+            document.querySelectorAll('.map-path').forEach(el => el.classList.remove('correct'));
+        }
+
+        // ==========================================
+        // 4. KAWALAN TETIKUS & SENTUHAN (FALLBACK)
+        // ==========================================
+        let isDragging = false;
+        
+        function resetLabelPosition() {
+            const container = document.getElementById('game-screen');
+            const rect = container.getBoundingClientRect();
+            draggableLabel.style.left = (rect.width / 2) + 'px';
+            draggableLabel.style.top = (rect.height - 100) + 'px';
+        }
+
+        function setupDragAndDrop() {
+            const startDrag = (e) => {
+                isDragging = true;
+                draggableLabel.style.zIndex = "1000";
+            };
+
+            const moveDrag = (e) => {
+                if (!isDragging) return;
+                let clientX = e.clientX;
+                let clientY = e.clientY;
+
+                if (e.touches && e.touches.length > 0) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                    e.preventDefault(); // Mengelak layar scroll semasa drag label
+                }
+
+                if(clientX !== undefined && clientY !== undefined) {
+                    draggableLabel.style.left = clientX + 'px';
+                    draggableLabel.style.top = clientY + 'px';
+                }
+            };
+
+            const endDrag = (e) => {
+                if (!isDragging) return;
+                isDragging = false;
+                draggableLabel.style.zIndex = "50";
+
+                draggableLabel.style.pointerEvents = 'none'; // Sembunyi diri sebentar untuk baca peta bawah
+                
+                let clientX = e.clientX;
+                let clientY = e.clientY;
+
+                if (e.changedTouches && e.changedTouches.length > 0) {
+                    clientX = e.changedTouches[0].clientX;
+                    clientY = e.changedTouches[0].clientY;
+                }
+                
+                if (clientX !== undefined && clientY !== undefined) {
+                    let elementBelow = document.elementFromPoint(clientX, clientY);
+                    if (elementBelow && elementBelow.classList.contains('map-path')) {
+                        semakJawapan(elementBelow.id);
+                    } else {
+                        resetLabelPosition();
+                    }
+                }
+                draggableLabel.style.pointerEvents = 'auto';
+            };
+
+            draggableLabel.addEventListener('mousedown', startDrag);
+            draggableLabel.addEventListener('touchstart', startDrag, {passive: false});
+            
+            document.addEventListener('mousemove', moveDrag);
+            document.addEventListener('touchmove', moveDrag, {passive: false});
+            
+            document.addEventListener('mouseup', endDrag);
+            document.addEventListener('touchend', endDrag);
+
+            // Boleh klik terus pada map
+            document.querySelectorAll('.map-path').forEach(path => {
+                path.addEventListener('click', (e) => {
+                    if(!isDragging && state.soalanSemasa) {
+                        semakJawapan(e.target.id);
+                    }
+                });
+            });
+        }
+
+        // ==========================================
+        // 5. MEDIAPIPE KAMERA & JARI (OPSIONAL / ASYNC)
+        // ==========================================
+        const cursorFinger = document.getElementById('finger-cursor');
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('canvasElement');
+        const canvasCtx = canvasElement.getContext('2d');
+        let camera, hands;
+
+        document.getElementById('btn-kamera').addEventListener('click', initKamera);
+
+        function initKamera() {
+            if (state.isKameraAktif) return;
+            
+            const btn = document.getElementById('btn-kamera');
+            
+            // Periksa adakah fail script luaran MediaPipe berjaya dibaca oleh browser
+            if (typeof Hands === 'undefined' || typeof Camera === 'undefined') {
+                handleKameraError(new Error("Pustaka MediaPipe gagal dimuatkan. Akses rangkaian terhalang."));
+                return;
+            }
+
+            btn.innerHTML = "⏳ Memuatkan...";
+            btn.disabled = true;
+
+            try {
+                document.getElementById('kamera-container').classList.remove('hidden');
+
+                hands = new Hands({locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }});
+                
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.6,
+                    minTrackingConfidence: 0.6
+                });
+                
+                hands.onResults(onHandResults);
+
+                camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({image: videoElement});
+                    },
+                    width: 320,
+                    height: 240
+                });
+                
+                camera.start().then(() => {
+                    state.isKameraAktif = true;
+                    btn.innerHTML = "✅ Kamera Aktif";
+                    btn.classList.remove('bg-green-500', 'hover:bg-green-600');
+                    btn.classList.add('bg-slate-500', 'cursor-not-allowed');
+                    document.getElementById('kamera-loading').style.display = 'none';
+                    cursorFinger.style.display = 'block';
+                    showNotification('Kamera diaktifkan! Buat gaya cubit (pinch) pada layar.', 'success');
+                }).catch(err => {
+                    handleKameraError(err);
+                });
+
+            } catch (err) {
+                handleKameraError(err);
+            }
+        }
+
+        function handleKameraError(err) {
+            console.error("Ralat Kamera:", err);
+            const btn = document.getElementById('btn-kamera');
+            btn.innerHTML = "❌ Kamera Gagal";
+            document.getElementById('kamera-container').classList.add('hidden');
+            showNotification('Kamera tak berfungsi. Sila gunakan tetikus / jari sentuh di skrin.', 'error', 4000);
+        }
+
+        let smoothedX = 0;
+        let smoothedY = 0;
+
+        function onHandResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                for(let i=0; i<landmarks.length; i++){
+                    let x = landmarks[i].x * canvasElement.width;
+                    let y = landmarks[i].y * canvasElement.height;
+                    canvasCtx.fillStyle = (i===4 || i===8) ? '#22c55e' : '#ef4444';
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, 3, 0, 2*Math.PI);
+                    canvasCtx.fill();
+                }
+
+                const thumb = landmarks[4];
+                const index = landmarks[8];
+                const screenW = window.innerWidth;
+                const screenH = window.innerHeight;
+                
+                let targetX = (1 - index.x) * screenW;
+                let targetY = index.y * screenH;
+
+                smoothedX += (targetX - smoothedX) * 0.3;
+                smoothedY += (targetY - smoothedY) * 0.3;
+
+                cursorFinger.style.left = smoothedX + 'px';
+                cursorFinger.style.top = smoothedY + 'px';
+
+                const dist = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
+                const pinchThreshold = 0.05;
+
+                if (dist < pinchThreshold) {
+                    if (!state.isPinching) {
+                        state.isPinching = true;
+                        cursorFinger.classList.add('pinching');
+                        
+                        const labelRect = draggableLabel.getBoundingClientRect();
+                        if (smoothedX >= labelRect.left && smoothedX <= labelRect.right &&
+                            smoothedY >= labelRect.top && smoothedY <= labelRect.bottom) {
+                            isDragging = true;
+                            draggableLabel.style.pointerEvents = 'none';
+                        }
+                    }
+                    
+                    if (isDragging) {
+                        draggableLabel.style.left = smoothedX + 'px';
+                        draggableLabel.style.top = smoothedY + 'px';
+                    }
+                } else {
+                    if (state.isPinching) {
+                        state.isPinching = false;
+                        cursorFinger.classList.remove('pinching');
+                        
+                        if (isDragging) {
+                            isDragging = false;
+                            let elementBelow = document.elementFromPoint(smoothedX, smoothedY);
+                            if (elementBelow && elementBelow.classList.contains('map-path')) {
+                                semakJawapan(elementBelow.id);
+                            } else {
+                                resetLabelPosition();
+                            }
+                            draggableLabel.style.pointerEvents = 'auto';
+                        }
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // ==========================================
+        // 6. TAMAT PERMAINAN & GOOGLE SHEETS
+        // ==========================================
+        function tamatPermainan() {
+            clearInterval(state.intervalMasa);
+            switchScreen('end');
+            
+            const title = document.getElementById('end-title');
+            const msg = document.getElementById('end-msg');
+            
+            if (state.nyawa <= 0) {
+                title.innerText = "CUBA LAGI!";
+                title.className = "text-4xl font-bold mb-2 text-red-600";
+                msg.innerText = "Nyawa anda telah habis.";
+            } else {
+                title.innerText = "TAHNIAH!";
+                title.className = "text-4xl font-bold mb-2 text-green-600";
+                msg.innerText = "Anda berjaya melengkapkan peta!";
+            }
+
+            document.getElementById('res-nama').innerText = state.nama;
+            document.getElementById('res-kelas').innerText = state.kelas;
+            document.getElementById('res-skor').innerText = state.skor;
+            document.getElementById('res-masa').innerText = formatMasa(state.masa);
+            document.getElementById('res-nyawa').innerText = state.nyawa;
+
+            simpanKeGoogleSheets();
+        }
+
+        function simpanKeGoogleSheets() {
+            const statusDiv = document.getElementById('save-status');
+            statusDiv.innerText = "Menyimpan rekod ke pangkalan data...";
+            statusDiv.className = "text-sm font-semibold text-blue-500 mb-4 h-6";
+
+            const dataPemain = {
+                nama: state.nama,
+                kelas: state.kelas,
+                skor: state.skor,
+                masa: formatMasa(state.masa),
+                nyawa: state.nyawa
+            };
+
+            // Pemeriksaan keselamatan untuk persekitaran (Preview vs GAS)
+            if (typeof google !== 'undefined' && google.script && google.script.run) {
+                google.script.run
+                    .withSuccessHandler((res) => {
+                        statusDiv.innerText = res.message;
+                        statusDiv.className = "text-sm font-semibold text-green-500 mb-4 h-6";
+                    })
+                    .withFailureHandler((err) => {
+                        statusDiv.innerText = "Amaran: Rekod gagal disimpan.";
+                        statusDiv.className = "text-sm font-semibold text-red-500 mb-4 h-6";
+                        console.error(err);
+                    })
+                    .saveRecord(dataPemain);
+            } else {
+                statusDiv.innerText = "Mod Ujian (Bukan persekitaran Apps Script). Data tidak disimpan.";
+                statusDiv.className = "text-sm font-semibold text-slate-500 mb-4 h-6";
+            }
+        }
+
+        document.getElementById('btn-main-semula').addEventListener('click', mulakanPermainan);
+        document.getElementById('btn-menu-utama').addEventListener('click', () => {
+            document.getElementById('input-nama').value = '';
+            document.getElementById('input-kelas').value = '';
+            switchScreen('reg');
+        });
+
+    </script>
+</body>
+</html>
